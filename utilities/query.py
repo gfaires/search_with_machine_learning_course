@@ -12,10 +12,22 @@ import pandas as pd
 import fileinput
 import logging
 import sys
+from pathlib import Path
+import fasttext
+
+import re
+
+# Useful if you want to perform stemming.
+import nltk
+stemmer = nltk.stem.PorterStemmer()
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
+model_path = Path('~/workspace/corise/datasets/fasttext/model_classification.bin').expanduser()
+print(f'Loading classification model from: {model_path}')
+model = fasttext.load_model(str(model_path))
+similarity_threshold = 0.5
 
 # expects clicks and impressions to be in the row
 def create_prior_queries_from_group(
@@ -186,12 +198,51 @@ def create_query(user_query, click_prior_query, filters, sort="_score", sortDir=
         query_obj["_source"] = source
     return query_obj
 
+def normalize_query(query):
+    normalized = re.sub('\W', ' ', query)
+    normalized = re.sub('\s+', ' ', normalized)
+    return stemmer.stem(normalized.lower())
+
+def classify_query(query, threshold=similarity_threshold):
+    print(f'Classifying query:{query}')
+    normalized_query = normalize_query(query)
+    print(f'Normalized query: {normalized_query}')
+    
+    k = 5
+    label_prefix = "__label__"
+    categories, probabilities = model.predict(query, k=k)
+    categories = [category.removeprefix(label_prefix) for category in categories]
+    print("Query classification results:")
+    for category, probability in zip(categories, probabilities):
+        print (category, probability)
+    min_threshold = 0.5
+    score = 0
+    classified_categories = []
+    for category, probability in zip(categories, probabilities):
+        classified_categories.append(category)
+        score += probability
+        if (score >= min_threshold):            
+            break
+    else:
+        print("Didn't get to threshold for classified categories")
+    print(f'Classified with categories: {classified_categories} and combined score {score}')
+    return classified_categories
 
 def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_synonyms=False):
     #### W3: classify the query
+    classified_query_categories = classify_query(user_query)
     #### W3: create filters and boosts
+    filters = []
+    if (classified_query_categories is not None):
+        filters.append(
+            {
+                "terms": {
+                    "categoryPathIds.keyword": classified_query_categories
+                }
+            }
+        ) 
     # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=None, sort=sort, sortDir=sortDir, source=["name", "shortDescription"], use_synonyms=use_synonyms)
+    query_obj = create_query(user_query, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"], use_synonyms=use_synonyms)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:

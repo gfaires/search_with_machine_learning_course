@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 import pandas as pd
 import numpy as np
 import csv
+import re
 
 # Useful if you want to perform stemming.
 import nltk
@@ -18,9 +19,13 @@ parser = argparse.ArgumentParser(description='Process arguments.')
 general = parser.add_argument_group("general")
 general.add_argument("--min_queries", default=1,  help="The minimum number of queries per category label (default is 1)")
 general.add_argument("--output", default=output_file_name, help="the file to output to")
+general.add_argument("--categories", default=categories_file_name,  help="The full path to the filename containing the categories")
+general.add_argument("--queries", default=queries_file_name,  help="The full path to the filename containing the queries training data")
 
 args = parser.parse_args()
 output_file_name = args.output
+categories_file_name = args.categories
+queries_file_name = args.queries
 
 if args.min_queries:
     min_queries = int(args.min_queries)
@@ -49,8 +54,30 @@ queries_df = pd.read_csv(queries_file_name)[['category', 'query']]
 queries_df = queries_df[queries_df['category'].isin(categories)]
 
 # IMPLEMENT ME: Convert queries to lowercase, and optionally implement other normalization, like stemming.
+def normalize(query):
+    normalized = re.sub('\W', ' ', query)
+    normalized = re.sub('\s+', ' ', normalized)
+    return stemmer.stem(normalized.lower())
+
+print("Normalizing queries")
+queries_df['query'] = queries_df['query'].apply(normalize)
 
 # IMPLEMENT ME: Roll up categories to ancestors to satisfy the minimum number of queries per category.
+
+def categories_under_threshold(df, threshold=min_queries):
+    return df.groupby("category").filter(lambda x: len(x) < threshold)['category'].unique()
+
+print(f'Rolling up categories with threshold: {min_queries}')
+cats_under_threshold = categories_under_threshold(queries_df)
+while(len(cats_under_threshold) > 0):
+    queries_df = pd.merge(queries_df, parents_df, on="category")
+    queries_df["category"].mask(queries_df['category'].isin(cats_under_threshold),queries_df['parent'],inplace=True)
+    cats_under_threshold = categories_under_threshold(queries_df)
+    queries_df.drop('parent',axis=1,inplace=True)
+    print(f'Number of categories left to roll-up: {len(cats_under_threshold)}')
+
+category_count = queries_df["category"].nunique()
+print(f'Number of unique categories: {category_count}')
 
 # Create labels in fastText format.
 queries_df['label'] = '__label__' + queries_df['category']
