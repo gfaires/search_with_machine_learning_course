@@ -16,6 +16,8 @@ from pathlib import Path
 import fasttext
 
 import re
+from sentence_transformers import SentenceTransformer
+sentence_transformer = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
 
 # Useful if you want to perform stemming.
 import nltk
@@ -24,9 +26,9 @@ stemmer = nltk.stem.PorterStemmer()
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
-model_path = Path('~/workspace/corise/datasets/fasttext/model_classification.bin').expanduser()
-print(f'Loading classification model from: {model_path}')
-model = fasttext.load_model(str(model_path))
+# model_path = Path('~/workspace/corise/datasets/fasttext/model_classification.bin').expanduser()
+# print(f'Loading classification model from: {model_path}')
+# model = fasttext.load_model(str(model_path))
 similarity_threshold = 0.5
 
 # expects clicks and impressions to be in the row
@@ -228,27 +230,43 @@ def classify_query(query, threshold=similarity_threshold):
     print(f'Classified with categories: {classified_categories} and combined score {score}')
     return classified_categories
 
-def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_synonyms=False):
-    #### W3: classify the query
-    classified_query_categories = classify_query(user_query)
-    #### W3: create filters and boosts
-    filters = []
-    if (classified_query_categories is not None):
-        filters.append(
-            {
-                "terms": {
-                    "categoryPathIds.keyword": classified_query_categories
+def search(client, user_query, index="bbuy_products", sort="_score", sortDir="desc", use_synonyms=False, use_vectors=False):
+    if use_vectors:
+        query_obj = create_vector_query(user_query=user_query)
+    else:
+        #### W3: classify the query
+        classified_query_categories = classify_query(user_query)
+        #### W3: create filters and boosts
+        filters = []
+        if (classified_query_categories is not None):
+            filters.append(
+                {
+                    "terms": {
+                        "categoryPathIds.keyword": classified_query_categories
+                    }
                 }
-            }
-        ) 
-    # Note: you may also want to modify the `create_query` method above
-    query_obj = create_query(user_query, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"], use_synonyms=use_synonyms)
+            ) 
+        # Note: you may also want to modify the `create_query` method above
+        query_obj = create_query(user_query, click_prior_query=None, filters=filters, sort=sort, sortDir=sortDir, source=["name", "shortDescription"], use_synonyms=use_synonyms)
     logging.info(query_obj)
     response = client.search(query_obj, index=index)
     if response and response['hits']['hits'] and len(response['hits']['hits']) > 0:
         hits = response['hits']['hits']
         print(json.dumps(response, indent=2))
 
+def create_vector_query(user_query, num_results=10):
+    vector = sentence_transformer.encode([user_query])[0]
+    return {
+        "size": num_results,
+        "query": {
+            "knn": {
+                "embedding": {
+                    "vector": vector,
+                    "k": num_results
+                }
+            }
+        }
+    }
 
 if __name__ == "__main__":
     host = 'localhost'
@@ -266,6 +284,10 @@ if __name__ == "__main__":
                          help='The OpenSearch admin.  If this is set, the program will prompt for password too. If not set, use default of admin/admin')
     general.add_argument('--synonyms',
                          help='Use synonyms on name field', action='store_true')
+    general.add_argument('--vector',
+                         help='Use vector query', action='store_true')
+    general.add_argument('--query',
+                         help='User query')
 
     args = parser.parse_args()
 
@@ -293,15 +315,11 @@ if __name__ == "__main__":
 
     )
     use_synonyms = args.synonyms
+    use_vectors = args.vector
     index_name = args.index
-    query_prompt = "\nEnter your query (type 'Exit' to exit or hit ctrl-c):"
-    print(query_prompt)
-    for line in sys.stdin:
-        query = line.rstrip()
-        if query == "Exit":
-            break
-        search(client=opensearch, user_query=query, index=index_name, use_synonyms=use_synonyms)
 
-        print(query_prompt)
+    query = args.query.rstrip()
+
+    search(client=opensearch, user_query=query, index=index_name, use_synonyms=use_synonyms, use_vectors=use_vectors)
 
     

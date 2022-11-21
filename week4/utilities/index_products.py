@@ -21,6 +21,7 @@ logger.setLevel(logging.INFO)
 logging.basicConfig(format='%(levelname)s:%(message)s')
 
 # IMPLEMENT ME: import the sentence transformers module!
+from sentence_transformers import SentenceTransformer
 
 # NOTE: this is not a complete list of fields.  If you wish to add more, put in the appropriate XPath expression.
 #TODO: is there a way to do this using XPath/XSL Functions so that we don't have to maintain a big list?
@@ -107,6 +108,8 @@ def get_opensearch():
 def index_file(file, index_name, reduced=False):
     logger.info("Creating Model")
     # IMPLEMENT ME: instantiate the sentence transformer model!
+    model = SentenceTransformer('sentence-transformers/all-MiniLM-L6-v2')
+    print(model)
     
     logger.info("Ready to index")
 
@@ -129,6 +132,7 @@ def index_file(file, index_name, reduced=False):
             xpath_expr = mappings[idx]
             key = mappings[idx + 1]
             doc[key] = child.xpath(xpath_expr)
+        names.append(doc['name'][0])
         #print(doc)
         if 'productId' not in doc or len(doc['productId']) == 0:
             continue
@@ -140,12 +144,18 @@ def index_file(file, index_name, reduced=False):
         #docs.append({'_index': index_name, '_source': doc})
         docs_indexed += 1
         if docs_indexed % 200 == 0:
+            embeddings = model.encode(names)
+            for doc, embedding in zip(docs, embeddings):
+                doc['_source']['embedding'] = embedding
             logger.info("Indexing")
             bulk(client, docs, request_timeout=60)
             logger.info(f'{docs_indexed} documents indexed')
             docs = []
             names = []
     if len(docs) > 0:
+        embeddings = model.encode(names)
+        for doc, embedding in zip(docs, embeddings):
+            doc['_source']['embedding'] = embedding
         bulk(client, docs, request_timeout=60)
         logger.info(f'{docs_indexed} documents indexed')
     return docs_indexed
